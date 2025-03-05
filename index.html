@@ -4,13 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebRTC Video Call (No Node.js)</title>
-    
-    <!-- Firebase CDN -->
     <script type="module">
+        // 🔥 Import Firebase Modules
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getFirestore, collection, doc, setDoc, getDoc, updateDoc, onSnapshot, addDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // 🔥 Your Firebase Config
+        // ✅ Firebase Configuration
         const firebaseConfig = {
             apiKey: "AIzaSyBY3CZVj6GdgNjYuWGi15yd6YnGGy4C-TU",
             authDomain: "webrtc-videocall-892bc.firebaseapp.com",
@@ -20,100 +19,136 @@
             appId: "1:722974378490:web:760e98754fe302d406fc43"
         };
 
-        // Initialize Firebase
+        // 🔥 Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        console.log("✅ Firebase Initialized Successfully!");
-
+        // 📡 WebRTC Variables
         let localStream;
         let remoteStream;
         let peerConnection;
         const servers = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-        const callDoc = doc(collection(db, "calls"), "testCall");
+        
+        // Firestore Collections
+        const callDoc = doc(db, "calls", "testCall");
         const offerCandidates = collection(callDoc, "offerCandidates");
         const answerCandidates = collection(callDoc, "answerCandidates");
 
+        // 🎥 Video Elements
+        const localVideo = document.getElementById("localVideo");
+        const remoteVideo = document.getElementById("remoteVideo");
+
+        // ✅ Get Camera & Microphone Access
         async function setupMedia() {
-            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            remoteStream = new MediaStream();
-            document.getElementById("localVideo").srcObject = localStream;
-            document.getElementById("remoteVideo").srcObject = remoteStream;
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                remoteStream = new MediaStream();
+
+                localVideo.srcObject = localStream;
+                remoteVideo.srcObject = remoteStream;
+
+                console.log("🎥 Local Stream Set Successfully!");
+            } catch (error) {
+                console.error("🚨 Camera/Microphone Access Failed:", error);
+            }
         }
 
+        // ✅ Start Call (Caller)
         async function startCall() {
-            console.log("🔵 Start Call button clicked");
+            console.log("📞 Starting Call...");
             await setupMedia();
             peerConnection = new RTCPeerConnection(servers);
 
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
             peerConnection.ontrack = event => {
+                console.log("📡 Received Remote Stream");
                 event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
             };
-            peerConnection.onicecandidate = async event => {
+
+            peerConnection.onicecandidate = event => {
                 if (event.candidate) {
-                    await addDoc(offerCandidates, event.candidate.toJSON());
+                    console.log("📡 Adding ICE Candidate (Offer)...", event.candidate);
+                    addDoc(offerCandidates, event.candidate.toJSON());
                 }
             };
 
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
+            console.log("✅ Offer Created:", offer);
+
             await setDoc(callDoc, { offer });
+            console.log("✅ Offer Stored in Firestore!");
 
             onSnapshot(callDoc, snapshot => {
                 const data = snapshot.data();
                 if (data?.answer) {
                     peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    console.log("✅ Answer Received & Set");
                 }
             });
 
             onSnapshot(answerCandidates, snapshot => {
                 snapshot.docChanges().forEach(change => {
                     if (change.type === "added") {
-                        peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                        const candidate = new RTCIceCandidate(change.doc.data());
+                        peerConnection.addIceCandidate(candidate);
+                        console.log("✅ Added Remote ICE Candidate");
                     }
                 });
             });
         }
 
+        // ✅ Answer Call (Receiver)
         async function answerCall() {
-            console.log("🟢 Answer Call button clicked");
+            console.log("📞 Answering Call...");
             await setupMedia();
             peerConnection = new RTCPeerConnection(servers);
 
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
             peerConnection.ontrack = event => {
+                console.log("📡 Received Remote Stream");
                 event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
             };
-            peerConnection.onicecandidate = async event => {
+
+            peerConnection.onicecandidate = event => {
                 if (event.candidate) {
-                    await addDoc(answerCandidates, event.candidate.toJSON());
+                    console.log("📡 Adding ICE Candidate (Answer)...", event.candidate);
+                    addDoc(answerCandidates, event.candidate.toJSON());
                 }
             };
 
             const callData = (await getDoc(callDoc)).data();
-            if (!callData) {
-                console.error("❌ No call data found!");
+            if (!callData?.offer) {
+                console.error("🚨 No Offer Found in Firestore!");
                 return;
             }
+
+            console.log("📡 Offer Found:", callData.offer);
             await peerConnection.setRemoteDescription(new RTCSessionDescription(callData.offer));
 
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
+            console.log("✅ Answer Created:", answer);
+
             await updateDoc(callDoc, { answer });
+            console.log("✅ Answer Stored in Firestore!");
 
             onSnapshot(offerCandidates, snapshot => {
                 snapshot.docChanges().forEach(change => {
                     if (change.type === "added") {
-                        peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                        const candidate = new RTCIceCandidate(change.doc.data());
+                        peerConnection.addIceCandidate(candidate);
+                        console.log("✅ Added Remote ICE Candidate");
                     }
                 });
             });
         }
 
-        window.startCall = startCall;
-        window.answerCall = answerCall;
-
+        // ✅ Button Event Listeners
+        document.getElementById("startCall").addEventListener("click", startCall);
+        document.getElementById("answerCall").addEventListener("click", answerCall);
     </script>
 
     <style>
@@ -121,11 +156,13 @@
     </style>
 </head>
 <body>
+
     <h2>WebRTC Video Call Using Firebase</h2>
-    <button onclick="startCall()">Start Call</button>
-    <button onclick="answerCall()">Answer Call</button>
+    <button id="startCall">Start Call</button>
+    <button id="answerCall">Answer Call</button>
     <br>
     <video id="localVideo" autoplay playsinline></video>
     <video id="remoteVideo" autoplay playsinline></video>
+
 </body>
 </html>
