@@ -4,23 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebRTC Video Call (No Node.js)</title>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"></script>
-    <style>
-        video { width: 45%; border: 2px solid black; margin: 10px; }
-    </style>
-</head>
-<body>
+    
+    <!-- Firebase CDN -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, doc, setDoc, getDoc, updateDoc, onSnapshot, addDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-    <h2>WebRTC Video Call Using Firebase</h2>
-    <button id="startCall">Start Call</button>
-    <button id="answerCall">Answer Call</button>
-    <br>
-    <video id="localVideo" autoplay playsinline></video>
-    <video id="remoteVideo" autoplay playsinline></video>
-
-    <script>
-        // 🔥 Firebase Config (Replace with your own)
+        // 🔥 Your Firebase Config
         const firebaseConfig = {
             apiKey: "AIzaSyBY3CZVj6GdgNjYuWGi15yd6YnGGy4C-TU",
             authDomain: "webrtc-videocall-892bc.firebaseapp.com",
@@ -30,126 +20,112 @@
             appId: "1:722974378490:web:760e98754fe302d406fc43"
         };
 
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        console.log("✅ Firebase Initialized Successfully!");
 
         let localStream;
         let remoteStream;
         let peerConnection;
-
-        const servers = {
-            iceServers: [
-                { urls: "stun:stun.l.google.com:19302" },  // Public STUN server
-                { 
-                    urls: "turn:relay1.expressturn.com:3478", 
-                    username: "ef5d3c58", 
-                    credential: "5zCz2LhY"
-                }
-            ]
-        };
-
-        const callDoc = db.collection("calls").doc("testCall");
-        const offerCandidates = callDoc.collection("offerCandidates");
-        const answerCandidates = callDoc.collection("answerCandidates");
-
-        const localVideo = document.getElementById("localVideo");
-        const remoteVideo = document.getElementById("remoteVideo");
+        const servers = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+        const callDoc = doc(collection(db, "calls"), "testCall");
+        const offerCandidates = collection(callDoc, "offerCandidates");
+        const answerCandidates = collection(callDoc, "answerCandidates");
 
         async function setupMedia() {
             localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             remoteStream = new MediaStream();
-            localVideo.srcObject = localStream;
-            remoteVideo.srcObject = remoteStream;
+            document.getElementById("localVideo").srcObject = localStream;
+            document.getElementById("remoteVideo").srcObject = remoteStream;
         }
 
         async function startCall() {
-            console.log("🔵 Starting call...");
+            console.log("🔵 Start Call button clicked");
             await setupMedia();
             peerConnection = new RTCPeerConnection(servers);
 
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
             peerConnection.ontrack = event => {
                 event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
             };
-
-            peerConnection.onicecandidate = event => {
+            peerConnection.onicecandidate = async event => {
                 if (event.candidate) {
-                    console.log("📡 Sending ICE Candidate:", event.candidate);
-                    offerCandidates.add(event.candidate.toJSON());
+                    await addDoc(offerCandidates, event.candidate.toJSON());
                 }
             };
 
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
-            console.log("✅ Offer Created:", offer);
+            await setDoc(callDoc, { offer });
 
-            await callDoc.set({ offer });
-            console.log("✅ Offer stored in Firebase");
-
-            callDoc.onSnapshot(snapshot => {
+            onSnapshot(callDoc, snapshot => {
                 const data = snapshot.data();
                 if (data?.answer) {
-                    console.log("✅ Answer received:", data.answer);
                     peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
                 }
             });
 
-            answerCandidates.onSnapshot(snapshot => {
+            onSnapshot(answerCandidates, snapshot => {
                 snapshot.docChanges().forEach(change => {
                     if (change.type === "added") {
-                        console.log("✅ Received Answer ICE Candidate:", change.doc.data());
-                        const candidate = new RTCIceCandidate(change.doc.data());
-                        peerConnection.addIceCandidate(candidate);
+                        peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
                     }
                 });
             });
         }
 
         async function answerCall() {
-            console.log("🟢 Answering call...");
+            console.log("🟢 Answer Call button clicked");
             await setupMedia();
             peerConnection = new RTCPeerConnection(servers);
 
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
             peerConnection.ontrack = event => {
                 event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
             };
-
-            peerConnection.onicecandidate = event => {
+            peerConnection.onicecandidate = async event => {
                 if (event.candidate) {
-                    console.log("📡 Sending Answer ICE Candidate:", event.candidate);
-                    answerCandidates.add(event.candidate.toJSON());
+                    await addDoc(answerCandidates, event.candidate.toJSON());
                 }
             };
 
-            const callData = (await callDoc.get()).data();
-            console.log("📥 Offer received:", callData.offer);
-
+            const callData = (await getDoc(callDoc)).data();
+            if (!callData) {
+                console.error("❌ No call data found!");
+                return;
+            }
             await peerConnection.setRemoteDescription(new RTCSessionDescription(callData.offer));
 
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
-            console.log("✅ Answer Created:", answer);
+            await updateDoc(callDoc, { answer });
 
-            await callDoc.update({ answer });
-            console.log("✅ Answer stored in Firebase");
-
-            offerCandidates.onSnapshot(snapshot => {
+            onSnapshot(offerCandidates, snapshot => {
                 snapshot.docChanges().forEach(change => {
                     if (change.type === "added") {
-                        console.log("✅ Received Offer ICE Candidate:", change.doc.data());
-                        const candidate = new RTCIceCandidate(change.doc.data());
-                        peerConnection.addIceCandidate(candidate);
+                        peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
                     }
                 });
             });
         }
 
-        document.getElementById("startCall").addEventListener("click", startCall);
-        document.getElementById("answerCall").addEventListener("click", answerCall);
+        window.startCall = startCall;
+        window.answerCall = answerCall;
+
     </script>
 
+    <style>
+        video { width: 45%; border: 2px solid black; margin: 10px; }
+    </style>
+</head>
+<body>
+    <h2>WebRTC Video Call Using Firebase</h2>
+    <button onclick="startCall()">Start Call</button>
+    <button onclick="answerCall()">Answer Call</button>
+    <br>
+    <video id="localVideo" autoplay playsinline></video>
+    <video id="remoteVideo" autoplay playsinline></video>
 </body>
 </html>
